@@ -23,7 +23,7 @@ anemometer_corr_factor = 1.18
 
 class Ser:
     ''' holds the serial interface parameters, provides data from the serial interface'''
-    __init__(self):
+    def __init__(self):
         self.port   = "/dev/serial0"
         self.bauds  = 9600
         self.size   = serial.EIGHTBITS
@@ -57,7 +57,7 @@ class Ser:
 
 class Air:
     ''' holds data and provides methods to communicate to the air sensor'''
-    __init__(self):
+    def __init__(self):
         self.air_request_inverval_s = 3 ## not less than 3 seconds
         self.commands = { ## per default commands address all devices (0xff in the address bytes)
             "get_work_mode"       : [0xaa,0xb4,0x02,0x00,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
