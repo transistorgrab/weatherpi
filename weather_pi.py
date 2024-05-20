@@ -4,22 +4,52 @@
 
 # tested with Python 3.11
 
-# requires: RPi.GPIO, gpiozero, DHT11, requests
+# requires: gpiozero, DHT11, requests
 
-from gpiozero import Button ## used to read the input from the anemometer (wind information)
-import DHT11    ## reads DHT11 temperature and humidity sensor
+from gpiozero import Button ## used to read the input from the anemometer (wind information),
+                            #  automatically sets pull-up active
+import RPi.GPIO as GPIO ## required for the DHT11 sensor, since gpiozero is not useable for this application
+import dht11    ## reads DHT11 temperature and humidity sensor
 import serial   ## required for reading the air quality sensor
 import requests ## used to connect to opensensmap
 import collections ## used to implement a fifo data buffer
 import time
+import math
 import threading ## used to run periodic tasks like fetching serial data
 import json
 
 debug = True
 
-# parameters 
-anemometer_radius_cm   = 9
-anemometer_corr_factor = 1.18
+class Wind:
+    def __init__(self):
+        self.radius_mm   = 90
+        self.pulses_per_revolution = 2.0
+        self.corr_factor = 1.18
+        self.port        = "GPIO18"
+        self.impulses    = 0
+        self.started     = time.time()
+    def init_sensor(self):
+        self.sensor      = Button(self.port)
+        self.sensor.when_pressed = self.count_impulse
+        self.started     = time.time()
+        self.impulses    = 0
+        self.circumfence = ((2 * math.pi) * self.radius_mm) / 1000.0
+    def count_impulse(self):
+        print(f"pulses: {self.impulses}") if debug else ()
+        self.impulses += 1
+    def get_wind_speed(self):
+        ''' first reads the collected pulses and time period,
+            and starts the new count cycle 
+            by setting a new "started" time and resetting the counter
+            then calculates the wind speed in m/s'''
+        revolutions   = self.impulses / self.pulses_per_revolution
+        read_time     = time.time()
+        started       = self.started
+        self.started  = read_time
+        self.impulses = 0 ## reset impulses for next read cycle
+        ## now we calculate the result: way traveled divided by time elapsed
+        speed = (self.circumfence * revolutions) / (read_time - started) * self.corr_factor
+        return (speed)
 
 class Ser:
     ''' holds the serial interface parameters, provides data from the serial interface'''
@@ -27,14 +57,14 @@ class Ser:
         self.port   = "/dev/serial0"
         self.bauds  = 9600
         self.size   = serial.EIGHTBITS
-        self.parity = serial.PARYTY_NONE
+        self.parity = serial.PARITY_NONE
         self.stop   = serial.STOPBITS_ONE
         self.data   = collections.deque()   ## this is a fifo that holds the data read from serial
         self.period_min = self.period_min_seconds() ## minimum period on seconds how often serial data can be read
         self.period = 3                     ## period in seconds how often to read serial data
     def period_min_seconds(self):
         return 3 ## implementing a static value here, serial cannot be read more often than that 
-    def post (data):
+    def post (self,data):
         self.data.appendleft(self,data)
     def get (self):
         return self.data.pop
@@ -70,12 +100,17 @@ class Air:
             "set_sleep_mode_off"  : [0xaa,0xb4,0x06,0x01,0x01,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
             "get_firmware_version": [0xaa,0xb4,0x07,0x00,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
             "get_working_period"  : [0xaa,0xb4,0x08,0x00,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
+            "get_sleep_mode"      : [0xaa,0xb4,0x06,0x00,0x00,0,0,0,0,0,0,0,0,0x01,0x01,0xff,0xff,0x00,0xab],
+            "set_sleep_mode_on"   : [0xaa,0xb4,0x06,0x01,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
+            "set_sleep_mode_off"  : [0xaa,0xb4,0x06,0x01,0x01,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
+            "get_firmware_version": [0xaa,0xb4,0x07,0x00,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
+            "get_working_period"  : [0xaa,0xb4,0x08,0x00,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
             "set_working_period"  : [0xaa,0xb4,0x08,0x01,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
                         }
         self.air_reply_type_id   = {0xC5:"report mode",
                                     0xC0:"sensor data"}
-        self.sleep_mode_response = {[0x00,0x00]:"sleeping",
-                                    [0x00,0x01]:"working",}
+        self.sleep_mode_response = {0x00:"sleeping",
+                                    0x01:"working",}
          
         ''' 
             10 data bytes from sensor
@@ -121,7 +156,27 @@ class Air:
         else: 
             return f"unknown command '{command}', available commands are {self.commands.keys()}" 
 
+class TH:
+    ''' provides data and methods to get temperature and humidity information '''
+    def __init__(self):
+        self.port = 4  ## pin 7 == "GPIO4"
+    def init_sensor(self):
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BCM)
+        GPIO.cleanup()
+        self.sensor = dht11.DHT11(pin = self.port)
+    def get(self):
+        return self.sensor.read()
 
+temp_hum = TH()
+temp_hum.init_sensor()
+wind = Wind()
+wind.init_sensor()
+air = Air()
+ser = Ser()
 
-
+while (1):
+    print(f"Wind reading: {wind.get_wind_speed()}")
+    print(f"Temperature reading: {temp_hum.get().temperature}, Humidity: {temp_hum.get().humidity}")
+    time.sleep(5)
 
