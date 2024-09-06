@@ -110,15 +110,17 @@ class Air:
             "set_sleep_mode_off"  : [0xaa,0xb4,0x06,0x01,0x01,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
             "get_firmware_version": [0xaa,0xb4,0x07,0x00,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
             "get_working_period"  : [0xaa,0xb4,0x08,0x00,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
-            "get_sleep_mode"      : [0xaa,0xb4,0x06,0x00,0x00,0,0,0,0,0,0,0,0,0x01,0x01,0xff,0xff,0x00,0xab],
-            "set_sleep_mode_on"   : [0xaa,0xb4,0x06,0x01,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
-            "set_sleep_mode_off"  : [0xaa,0xb4,0x06,0x01,0x01,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
-            "get_firmware_version": [0xaa,0xb4,0x07,0x00,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
-            "get_working_period"  : [0xaa,0xb4,0x08,0x00,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
             "set_working_period"  : [0xaa,0xb4,0x08,0x01,0x00,0,0,0,0,0,0,0,0,0x00,0x00,0xff,0xff,0x00,0xab],
                         }
-        self.reply_type_id   = {0xC5:"report mode",
-                                    0xC0:"sensor data"}
+        self.reply_type_id = {0xC5:"report mode",
+                              0xC0:"sensor data",}
+        self.report_mode   = {0x02:"data reporting",
+                              0x05:"device ID",
+                              0x06:"sleep mode",
+                              0x07:"firmware version",
+                              0x08:"working period",}
+        self.work_mode_response = {0x00:"active",
+                                   0x01:"query",}
         self.sleep_mode_response = {0x00:"sleeping",
                                     0x01:"working",}
          
@@ -201,22 +203,35 @@ class Air:
                     continue
                 if (self.reply_type_id[packet[1]] == "report mode"):
                     print (f"found report: {packet}") if debug else ()
-                    pass
-                if (self.reply_type_id[packet[1]] == "sensor data"):
-                    print (f"found sensor data: {packet}") if debug else ()
-                    reply["PM2.5"] = int(packet[3]<<8) + int(packet[2])
-                    print (f"PM2.5: {reply['PM2.5']}") if debug else ()
-                    reply["PM10"]  = int(packet[5]<<8) + int(packet[4])
-                    print (f"PM10: {reply['PM10']}") if debug else ()
-                    reply["ID"]    = int(packet[7]<<8) + int(packet[6])
-                    print (f"ID: {reply['ID']}") if debug else ()
-            return reply
+                    if self.report_mode[packet[2]] == "data reporting":
+                        reply["reporting mode"] = self.work_mode_response[packet[4]]
+                    if self.report_mode[packet[2]] == "sleep mode":
+                        reply["sleep mode"] = self.sleep_mode_response[packet[4]]
+                    if self.report_mode[packet[2]] == "working period":
+                        reply["working period"] = (packet[4],"minutes")
+                    if self.report_mode[packet[2]] == "firmware version":
+                        reply["firmware version"] = (packet[3],packet[4],packet[5])
+                    if self.report_mode[packet[2]] == "device ID":
+                        pass
 
+                    reply["device ID"] = int(packet[6]<<8)+int(packet[7])
+
+                elif (self.reply_type_id[packet[1]] == "sensor data"):
+                    print (f"found sensor data: {packet}") if debug else ()
+                    reply["PM2.5"] = float(int(packet[3]<<8) + int(packet[2])) * 0.1
+                    reply["PM10"]  = float(int(packet[5]<<8) + int(packet[4])) * 0.1
+                    reply["ID"]    = int(packet[6]<<8) + int(packet[7])
+
+            if debug:
+                for key in reply.keys():
+                    print (f"{key}: {reply[key]}")
+
+            return reply
 
 class TH:
     ''' provides data and methods to get temperature and humidity information '''
     def __init__(self):
-        self.port = 4  ## pin 7 == "GPIO4"
+        self.port = 6  ## pin 7 == "GPIO4"
         self.error = {1:"missing data",2:"CRC faulty"}
     def init_sensor(self):
         GPIO.setwarnings(False)
